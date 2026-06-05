@@ -44,9 +44,9 @@ namespace {
 
 // Parses exclude_layers from JSON and adds them to the request's tile options
 void parse_exclude_layers(const boost::optional<rapidjson::Value&>& exclude_layers, Api& request) {
-  static const std::unordered_set<std::string_view> kSupportedLayers = {valhalla::kEdgeLayerName,
-                                                                        valhalla::kNodeLayerName,
-                                                                        valhalla::kShortcutLayerName};
+  static const std::unordered_set<std::string_view> kSupportedLayers =
+      {valhalla::kEdgeLayerName, valhalla::kNodeLayerName, valhalla::kShortcutLayerName,
+       valhalla::kAccessRestrictionLayerName};
 
   if (exclude_layers.has_value() && exclude_layers->IsArray()) {
     for (const auto& lyr : exclude_layers->GetArray()) {
@@ -571,7 +571,8 @@ void parse_contours(const rapidjson::Document& doc,
 // parse all costings needed to fulfill the request, including recostings
 void parse_recostings(const rapidjson::Document& doc,
                       const std::string& key,
-                      valhalla::Options& options) {
+                      valhalla::Options& options,
+                      google::protobuf::RepeatedPtrField<valhalla::CodedDescription>& warnings) {
   // make sure we only have unique recosting names in the end
   std::unordered_set<std::string> names;
   auto check_name = [&names](const valhalla::Costing& recosting) -> void {
@@ -589,13 +590,13 @@ void parse_recostings(const rapidjson::Document& doc,
     for (size_t i = 0; i < recostings->GetArray().Size(); ++i) {
       // parse the options
       std::string key = "/recostings/" + std::to_string(i);
-      sif::ParseCosting(doc, key, options.add_recostings());
+      sif::ParseCosting(doc, key, options.add_recostings(), warnings);
       check_name(*options.recostings().rbegin());
     }
   } else if (options.recostings().size()) {
     for (auto& recosting : *options.mutable_recostings()) {
       check_name(recosting);
-      sif::ParseCosting(doc, key, &recosting, recosting.type());
+      sif::ParseCosting(doc, key, &recosting, warnings, recosting.type());
     }
   }
 }
@@ -639,7 +640,13 @@ void parse_line_geojson(const rapidjson::Value& json_feat, valhalla::LinearFeatu
     shape_pt->mutable_ll()->set_lng(coords_j.GetArray()[0].GetFloat());
     shape_pt->mutable_ll()->set_lat(coords_j.GetArray()[1].GetFloat());
   }
-  line_feat->set_cost_factor(json_obj["properties"].GetObject()["factor"].GetFloat());
+  if (json_obj["properties"].GetObject().HasMember("factor")) {
+    line_feat->set_cost_factor(json_obj["properties"].GetObject()["factor"].GetFloat());
+  } else if (json_obj["properties"].GetObject().HasMember("ignore_access_restrictions")) {
+    line_feat->set_ignore_access_restrictions(
+        json_obj["properties"].GetObject()["ignore_access_restrictions"].GetBool());
+    line_feat->set_cost_factor(1);
+  }
 }
 
 void parse_line(const rapidjson::Value& json_feat, valhalla::LinearFeatureCost* line_feat) {
@@ -654,7 +661,12 @@ void parse_line(const rapidjson::Value& json_feat, valhalla::LinearFeatureCost* 
     shape_pt->mutable_ll()->set_lat(ll.lat());
   }
 
-  line_feat->set_cost_factor(json_obj["factor"].GetFloat());
+  if (json_obj.HasMember("factor")) {
+    line_feat->set_cost_factor(json_obj["factor"].GetFloat());
+  } else if (json_obj.HasMember("ignore_access_restrictions")) {
+    line_feat->set_cost_factor(1);
+    line_feat->set_ignore_access_restrictions(json_obj["ignore_access_restrictions"].GetBool());
+  }
 }
 
 /**
@@ -684,6 +696,7 @@ void from_json(rapidjson::Document& doc, Options::Action action, Api& api) {
   auto& options = *api.mutable_options();
   if (Options::Action_IsValid(action))
     options.set_action(action);
+  auto& warnings = *api.mutable_info()->mutable_warnings();
 
   // matrix can be slimmed down but shouldn't by default for backwards-compatibility reasons
   if (options.action() == Options::sources_to_targets) {
@@ -755,18 +768,15 @@ void from_json(rapidjson::Document& doc, Options::Action action, Api& api) {
     options.set_id(*id);
   }
 
+  // we deprecated jsonp, CORS should be used instead
   auto jsonp = rapidjson::get_optional<std::string>(doc, "/jsonp");
   if (jsonp) {
-    options.set_jsonp(*jsonp);
+    add_warning(api, 104);
   }
 
   if (!is_format_supported(options.action(), options.format())) {
     options.set_format(Options::json);
     add_warning(api, 211);
-  }
-  if (options.format() == Options::pbf) {
-    // jsonp wont work because javascript doesnt support byte arrays
-    options.clear_jsonp();
   }
 
   auto units = rapidjson::get_optional<std::string>(doc, "/units");
@@ -964,7 +974,7 @@ void from_json(rapidjson::Document& doc, Options::Action action, Api& api) {
   //   the gurka_closure_penalty test fails. investigate why.. intuitively it makes no sense,
   //   as in the above logic the costing options aren't even parsed yet,
   //   so how can it determine "ignore_closures" there?
-  sif::ParseCosting(doc, "/costing_options", options);
+  sif::ParseCosting(doc, "/costing_options", options, warnings);
 
   // if any of the locations params have a date_time object in their locations, we'll remember
   // only /sources_to_targets will parse more than one location collection and there it's fine
@@ -1087,7 +1097,7 @@ void from_json(rapidjson::Document& doc, Options::Action action, Api& api) {
   }
 
   // parse any named costings for re-costing a given path
-  parse_recostings(doc, "/recostings", options);
+  parse_recostings(doc, "/recostings", options, warnings);
 
   // get the locations in there
   parse_locations(doc, api, "locations", 130, ignore_closures, had_date_time);
@@ -1122,7 +1132,8 @@ void from_json(rapidjson::Document& doc, Options::Action action, Api& api) {
   auto matrix_locations = rapidjson::get_optional<int>(doc, "/matrix_locations");
   if (matrix_locations && (options.sources_size() == 1 || options.targets_size() == 1)) {
     options.set_matrix_locations(*matrix_locations);
-  } else if (!options.has_matrix_locations_case()) {
+  } else if (!options.has_matrix_locations_case() ||
+             (options.sources_size() != 1 && options.targets_size() != 1)) {
     options.set_matrix_locations(std::numeric_limits<uint32_t>::max());
   }
 
@@ -1372,8 +1383,7 @@ std::string serialize_error(const valhalla_exception_t& exception, Api& request)
 
   // overwrite with osrm error response
   if (request.options().format() == Options::osrm) {
-    body << (request.options().has_jsonp_case() ? request.options().jsonp() + "(" : "")
-         << exception.osrm_error << (request.options().has_jsonp_case() ? ")" : "");
+    body << exception.osrm_error;
   } // valhalla json error response
   else if (request.options().format() != Options::pbf) {
     // build up the json map
@@ -1382,8 +1392,7 @@ std::string serialize_error(const valhalla_exception_t& exception, Api& request)
     json_error->emplace("status_code", static_cast<uint64_t>(exception.http_code));
     json_error->emplace("error", std::string(exception.message));
     json_error->emplace("error_code", static_cast<uint64_t>(exception.code));
-    body << (request.options().has_jsonp_case() ? request.options().jsonp() + "(" : "") << *json_error
-         << (request.options().has_jsonp_case() ? ")" : "");
+    body << *json_error;
   }
 
   // keep track of what the error was
@@ -1634,9 +1643,7 @@ worker_t::result_t serialize_error(const valhalla_exception_t& exception,
                                    Api& request) {
   worker_t::result_t result{false, std::list<std::string>(), ""};
   http_response_t response(exception.http_code, exception.http_message,
-                           serialize_error(exception, request),
-                           headers_t{CORS, request.options().has_jsonp_case() ? worker::JS_MIME
-                                                                              : worker::JSON_MIME});
+                           serialize_error(exception, request), headers_t{CORS, worker::JSON_MIME});
   response.from_info(request_info);
   result.messages.emplace_back(response.to_string());
 
@@ -1656,24 +1663,10 @@ to_response(const std::string& data,
   if (fmt == Options::gpx)
     headers.insert(ATTACHMENT);
 
-  // jsonp needs wrapped in a javascript function call
   worker_t::result_t result{false, std::list<std::string>(), ""};
-  if (request.options().has_jsonp_case()) {
-    headers.insert(worker::JS_MIME); // reset content type to javascript
-    std::ostringstream stream;
-    stream << request.options().jsonp() << '(';
-    stream << data;
-    stream << ')';
-
-    http_response_t response(200, "OK", stream.str(), headers);
-    response.from_info(request_info);
-    result.messages.emplace_back(response.to_string());
-  } // everything else is bytes already
-  else {
-    http_response_t response(200, "OK", data, headers);
-    response.from_info(request_info);
-    result.messages.emplace_back(response.to_string());
-  }
+  http_response_t response(200, "OK", data, headers);
+  response.from_info(request_info);
+  result.messages.emplace_back(response.to_string());
   return result;
 }
 
