@@ -69,11 +69,7 @@ std::string serializeHeight(const Api& request,
  * @param projections  The correlated locations
  * @param reader       A graph reader to get at each correlated points info
  */
-std::string
-serializeLocate(const Api& request,
-                const std::vector<baldr::Location>& locations,
-                const std::unordered_map<baldr::Location, baldr::PathLocation>& projections,
-                baldr::GraphReader& reader,
+std::string serializeLocate(const Api& request, baldr::GraphReader& reader,
                 sif::cost_ptr_t costing);
 
 /**
@@ -84,9 +80,7 @@ serializeLocate(const Api& request,
  * @param locations  The input locations
  * @param found      Which locations had transit
  */
-std::string serializeTransitAvailable(const Api& request,
-                                      const std::vector<baldr::Location>& locations,
-                                      const std::unordered_set<baldr::Location>& found);
+std::string serializeTransitAvailable(const Api& request);
 
 /**
  * Turn trip paths and the match results of each into attributes based on the filter specified
