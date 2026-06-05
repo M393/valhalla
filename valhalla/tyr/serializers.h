@@ -69,8 +69,8 @@ std::string serializeHeight(const Api& request,
  * @param projections  The correlated locations
  * @param reader       A graph reader to get at each correlated points info
  */
-std::string serializeLocate(const Api& request, baldr::GraphReader& reader,
-                sif::cost_ptr_t costing);
+std::string
+serializeLocate(const Api& request, baldr::GraphReader& reader, const sif::cost_ptr_t& costing);
 
 /**
  * Turn a list of locations into a list of locations with a bool that says whether transit tiles are

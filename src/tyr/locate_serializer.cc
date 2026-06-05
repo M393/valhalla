@@ -121,7 +121,7 @@ const DirectedEdge* get_opposing_edge(const DirectedEdge* de, GraphReader& reade
 
 void get_full_road_segment(rapidjson::writer_wrapper_t& writer,
                            const DirectedEdge* de,
-                           const std::shared_ptr<sif::DynamicCost>& costing,
+                           const sif::cost_ptr_t& costing,
                            const double percent_along,
                            GraphReader& reader,
                            const valhalla::SearchFilter& search_filter) {
@@ -456,7 +456,7 @@ void serialize_edges(const Location& location,
                      rapidjson::writer_wrapper_t& writer,
                      bool verbose,
                      bool full_road_segments,
-                     sif::cost_ptr_t& costing) {
+                     const sif::cost_ptr_t& costing) {
   auto serialize_edge = [&](const PathEdge& edge) {
     writer.start_object();
     try {
@@ -681,7 +681,7 @@ void serialize(rapidjson::writer_wrapper_t& writer,
                GraphReader& reader,
                bool verbose,
                bool road_segments,
-               sif::cost_ptr_t costing) {
+               const sif::cost_ptr_t& costing) {
   // serialze all the edges
   writer.start_object();
   writer.set_precision(tyr::kCoordinatePrecision);
@@ -716,9 +716,7 @@ void serialize(rapidjson::writer_wrapper_t& writer,
 namespace valhalla {
 namespace tyr {
 
-std::string serializeLocate(const Api& request,
-                            GraphReader& reader,
-                            sif::cost_ptr_t costing) {
+std::string serializeLocate(const Api& request, GraphReader& reader, const sif::cost_ptr_t& costing) {
   rapidjson::writer_wrapper_t writer(4096);
   writer.start_array();
 
