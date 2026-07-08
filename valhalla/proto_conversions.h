@@ -14,6 +14,7 @@ constexpr std::string_view kEdgeLayerName = "edges";
 constexpr std::string_view kNodeLayerName = "nodes";
 constexpr std::string_view kAccessRestrictionLayerName = "access_restrictions";
 constexpr std::string_view kShortcutLayerName = "shortcuts";
+constexpr std::string_view kIncidentLayerName = "incidents";
 
 bool Use_Reverse_Enum_parse(std::string& use_str, valhalla::TripLeg_Use use);
 bool Use_Enum_parse(const std::string& use_name, valhalla::TripLeg_Use* use);
