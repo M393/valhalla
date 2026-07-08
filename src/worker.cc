@@ -347,7 +347,7 @@ void parse_location(valhalla::Location* location,
       }
     } else { // fallback to min_use/max_use
       // search_filter.min_use
-      auto min_use = rapidjson::get<std::string>(*search_filter, "/min_use", "transitconnection");
+      auto min_use = rapidjson::get<std::string>(*search_filter, "/min_use", "transit_connection");
       valhalla::TripLeg_Use minu;
       if (!valhalla::Use_Enum_parse(min_use, &minu)) {
         minu = TripLeg_Use_kTransitConnectionUse;
