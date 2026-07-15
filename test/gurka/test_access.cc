@@ -891,8 +891,52 @@ protected:
 gurka::nodelayout CombinedRestrictionTagValues::layout = {};
 gurka::ways CombinedRestrictionTagValues::ways = {};
 
-TEST_F(CombinedRestrictionTagValues, DeniedCombinedValueAccess) {
+// motor_vehicle=forestry;agricultural parses as a combined value and is treated as destination-only,
+// so the single edge between the route endpoints is usable.
+TEST_F(CombinedRestrictionTagValues, CombinedValueAllowedAsDestination) {
   const gurka::map map =
       gurka::buildtiles(layout, ways, {}, {}, "test/data/combined_restriction_tag_values");
-  check_auto_path(map, {});
+  check_auto_path(map, {"AB"});
+}
+
+// access=agricultural/forestry must be treated exactly like access=destination: the way stays
+// routable as destination-only rather than being dropped from the graph. Truck keys off the HGV
+// dest-only flag, so parity requires those values in the `private` table too - the per-mode
+// equivalence check below covers that.
+TEST(Standalone, AgriculturalForestryTreatedAsDestination) {
+  const std::string ascii_map = R"(
+      A----B----C----D----E
+                     |    |
+           I----H----G----F
+  )";
+
+  auto make_ways = [](const std::string& dg_access) {
+    return gurka::ways{
+        {"AB", {{"highway", "unclassified"}}}, {"BC", {{"highway", "unclassified"}}},
+        {"CD", {{"highway", "unclassified"}}}, {"DE", {{"highway", "unclassified"}}},
+        {"EF", {{"highway", "unclassified"}}}, {"FG", {{"highway", "unclassified"}}},
+        {"GH", {{"highway", "unclassified"}}}, {"HI", {{"highway", "unclassified"}}},
+        {"DG", {{"highway", "unclassified"}, {"access", dg_access}}},
+    };
+  };
+
+  const auto layout = gurka::detail::map_to_coordinates(ascii_map, 100);
+  auto dst = gurka::buildtiles(layout, make_ways("destination"), {}, {},
+                               "test/data/gurka_agri_as_destination");
+  auto agr = gurka::buildtiles(layout, make_ways("agricultural;forestry"), {}, {},
+                               "test/data/gurka_agri_forestry");
+
+  for (const auto* mode : {"auto", "truck", "motor_scooter"}) {
+    for (const auto& locs :
+         {std::vector<std::string>{"A", "I"}, std::vector<std::string>{"A", "G"}}) {
+      auto expected = gurka::do_action(valhalla::Options::route, dst, locs, mode);
+      auto actual = gurka::do_action(valhalla::Options::route, agr, locs, mode);
+      EXPECT_EQ(gurka::detail::get_paths(actual), gurka::detail::get_paths(expected))
+          << mode << " " << locs.front() << "->" << locs.back();
+    }
+  }
+
+  baldr::GraphReader reader(agr.config.get_child("mjolnir"));
+  EXPECT_TRUE(std::get<1>(gurka::findEdge(reader, layout, "DG", "G"))->destonly())
+      << "agricultural/forestry edge should be destination-only";
 }
